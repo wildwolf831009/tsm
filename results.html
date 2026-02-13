@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>전국 전통시장 결과</title>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=0d701da1da5044f06ca12a7a5bacfab8&autoload=false"></script>
+
+<style>
+body { font-family: Arial; padding:20px; }
+#map { width:100%; height:400px; margin-bottom:20px; }
+.error { color:red; font-weight:bold; }
+</style>
+</head>
+
+<body>
+
+<h2>전국 전통시장 결과</h2>
+<div id="error" class="error"></div>
+
+<div id="map"></div>
+
+<table id="marketTable" class="display">
+<thead>
+<tr>
+<th>시장명</th>
+<th>장날</th>
+<th>시도</th>
+<th>시군구</th>
+<th>주소</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+
+<script>
+
+function getParam(name){
+    const url = new URL(window.location.href);
+    return url.searchParams.get(name);
+}
+
+const sidoParam = getParam("sido");
+const sigunguParam = getParam("sigungu");
+
+let map;
+let geocoder;
+
+kakao.maps.load(function () {
+    const container = document.getElementById('map');
+    map = new kakao.maps.Map(container, {
+        center: new kakao.maps.LatLng(36.5,127.8),
+        level: 13
+    });
+    geocoder = new kakao.maps.services.Geocoder();
+});
+
+fetch("markets_base_from_xls.json")
+.then(res => res.json())
+.then(data => {
+
+    const filtered = data.filter(item => {
+        if(sidoParam && item["시도"] !== sidoParam) return false;
+        if(sigunguParam && item["시군구"] !== sigunguParam) return false;
+        return true;
+    });
+
+    if(filtered.length === 0){
+        $("#error").text("데이터 없음");
+    }
+
+    $('#marketTable').DataTable({
+        destroy:true,
+        data: filtered,
+        columns: [
+            { data: '시장명', defaultContent:'' },
+            { data: '장날', defaultContent:'' },
+            { data: '시도', defaultContent:'' },
+            { data: '시군구', defaultContent:'' },
+            { data: '주소', defaultContent:'' }
+        ]
+    });
+
+    // 지도 마커
+    filtered.forEach(item => {
+
+        if(!item["주소"]) return;
+
+        geocoder.addressSearch(item["주소"], function(result, status) {
+            if (status === kakao.maps.services.Status.OK) {
+
+                const coords = new kakao.maps.LatLng(result[0].y, result[0].x);
+
+                const marker = new kakao.maps.Marker({
+                    map: map,
+                    position: coords
+                });
+
+                const infowindow = new kakao.maps.InfoWindow({
+                    content: `<div style="padding:5px;font-size:12px;">${item["시장명"]}</div>`
+                });
+
+                kakao.maps.event.addListener(marker, 'click', function() {
+                    infowindow.open(map, marker);
+                });
+
+                map.setCenter(coords);
+            }
+        });
+    });
+
+})
+.catch(err => {
+    $("#error").text("데이터 로딩 실패");
+    console.error(err);
+});
+
+</script>
+
+</body>
+</html>
