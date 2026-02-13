@@ -1,126 +1,291 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<title>전국 전통시장 결과</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>전국 전통시장 결과</title>
 
-<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <!-- DataTables (jQuery 필요) -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css" />
+  <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 
-<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
-<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
-
-<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=0d701da1da5044f06ca12a7a5bacfab8&autoload=false"></script>
-
-<style>
-body { font-family: Arial; padding:20px; }
-#map { width:100%; height:400px; margin-bottom:20px; }
-.error { color:red; font-weight:bold; }
-</style>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; margin: 24px; }
+    h1 { margin: 0 0 8px; }
+    .meta { color: #666; margin: 0 0 16px; font-size: 13px; }
+    .topbar { display:flex; align-items:center; gap:12px; margin-bottom: 16px; }
+    .topbar a { text-decoration: none; color: #0b57d0; }
+    .warn { margin: 8px 0 12px; color: #c00; font-weight: 600; }
+    #map { width: 100%; height: 420px; border: 1px solid #e5e5e5; border-radius: 10px; overflow:hidden; }
+    .table-wrap { margin-top: 16px; }
+  </style>
 </head>
 
 <body>
+  <div class="topbar">
+    <a href="./index.html">← 다시 선택하기</a>
+  </div>
 
-<h2>전국 전통시장 결과</h2>
-<div id="error" class="error"></div>
+  <h1>전국 전통시장 결과</h1>
+  <p class="meta" id="metaText"></p>
 
-<div id="map"></div>
+  <div class="warn" id="warnText" style="display:none;"></div>
 
-<table id="marketTable" class="display">
-<thead>
-<tr>
-<th>시장명</th>
-<th>장날</th>
-<th>시도</th>
-<th>시군구</th>
-<th>주소</th>
-</tr>
-</thead>
-<tbody></tbody>
-</table>
+  <div id="map"></div>
 
-<script>
+  <div class="table-wrap">
+    <table id="tbl" class="display" style="width:100%">
+      <thead>
+        <tr>
+          <th>시장명</th>
+          <th>장날</th>
+          <th>시도</th>
+          <th>시군구</th>
+          <th>주소</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
-function getParam(name){
-    const url = new URL(window.location.href);
-    return url.searchParams.get(name);
-}
+  <!-- ✅ 카카오 지도 SDK: 너 파일에 들어있는 appkey 그대로 유지/삽입 -->
+  <!-- 아래 appkey= 뒤 값은 네 키로 바꿔줘 (이미 있는 키 그대로 넣으면 됨) -->
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=0d701da1da5044f06ca12a7a5bacfab8&autoload=false"></script>
 
-const sidoParam = getParam("sido");
-const sigunguParam = getParam("sigungu");
+  <script>
+    // ===== 유틸 =====
+    const norm = (v) => (v ?? "").toString().trim();
 
-let map;
-let geocoder;
-
-kakao.maps.load(function () {
-    const container = document.getElementById('map');
-    map = new kakao.maps.Map(container, {
-        center: new kakao.maps.LatLng(36.5,127.8),
-        level: 13
-    });
-    geocoder = new kakao.maps.services.Geocoder();
-});
-
-fetch("markets_base_from_xls.json")
-.then(res => res.json())
-.then(data => {
-
-    const filtered = data.filter(item => {
-        if(sidoParam && item["시도"] !== sidoParam) return false;
-        if(sigunguParam && item["시군구"] !== sigunguParam) return false;
-        return true;
-    });
-
-    if(filtered.length === 0){
-        $("#error").text("데이터 없음");
+    function getParam(name) {
+      const v = new URLSearchParams(location.search).get(name);
+      // ✅ 핵심: GitHub Pages에서 한글 파라미터 비교 깨지는 것 방지
+      return v ? decodeURIComponent(v).trim() : "";
     }
 
-    $('#marketTable').DataTable({
-        destroy:true,
-        data: filtered,
-        columns: [
-            { data: '시장명', defaultContent:'' },
-            { data: '장날', defaultContent:'' },
-            { data: '시도', defaultContent:'' },
-            { data: '시군구', defaultContent:'' },
-            { data: '주소', defaultContent:'' }
-        ]
-    });
+    function toIntArray(v) {
+      if (Array.isArray(v)) return v.map(x => parseInt(x, 10)).filter(Number.isFinite);
+      if (typeof v === "string") {
+        // "4·9", "2,7", "매월 2,7,12..." 같은 경우를 숫자만 뽑음
+        const nums = v.match(/\d+/g);
+        return nums ? nums.map(n => parseInt(n, 10)) : [];
+      }
+      return [];
+    }
 
-    // 지도 마커
-    filtered.forEach(item => {
+    // ===== 메타/파라미터 =====
+    const sidoParam = norm(getParam("sido"));
+    const sigunguParam = norm(getParam("sigungu"));
+    const excludeDaily = norm(getParam("excludeDaily")) === "1";
+    const cyclePick = norm(getParam("cycle")); // optional (없으면 전체)
 
-        if(!item["주소"]) return;
+    const metaEl = document.getElementById("metaText");
+    metaEl.textContent = `조건: 시도(${sidoParam || "전체"}) / 시군구(${sigunguParam || "전체"})`
+      + (cyclePick ? ` / 장날(${cyclePick})` : "")
+      + (excludeDaily ? " / 매일장(상설) 제외" : "");
 
-        geocoder.addressSearch(item["주소"], function(result, status) {
-            if (status === kakao.maps.services.Status.OK) {
+    // ===== 데이터 로드 =====
+    async function loadMarkets() {
+      // ✅ GitHub Pages 대응: 항상 상대경로
+      const res = await fetch("./markets_base_from_xls.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(`데이터 파일 로드 실패: ${res.status}`);
+      const data = await res.json();
+      if (!Array.isArray(data)) throw new Error("JSON 구조가 배열이 아님");
+      return data;
+    }
 
-                const coords = new kakao.maps.LatLng(result[0].y, result[0].x);
+    function applyFilter(markets) {
+      let out = markets;
 
-                const marker = new kakao.maps.Marker({
-                    map: map,
-                    position: coords
-                });
+      if (sidoParam) out = out.filter(m => norm(m.sido) === sidoParam);
+      if (sigunguParam) out = out.filter(m => norm(m.sigungu) === sigunguParam);
 
-                const infowindow = new kakao.maps.InfoWindow({
-                    content: `<div style="padding:5px;font-size:12px;">${item["시장명"]}</div>`
-                });
-
-                kakao.maps.event.addListener(marker, 'click', function() {
-                    infowindow.open(map, marker);
-                });
-
-                map.setCenter(coords);
-            }
+      // 장날 선택이 있는 경우(옵션)
+      if (cyclePick && cyclePick !== "전체") {
+        // cycle_label 또는 cycle_raw에 포함되는지로 판단
+        out = out.filter(m => {
+          const a = norm(m.cycle_label);
+          const b = norm(m.cycle_raw);
+          return a === cyclePick || b.includes(cyclePick) || a.includes(cyclePick);
         });
+      }
+
+      // 매일장(상설) 제외
+      if (excludeDaily) {
+        out = out.filter(m => norm(m.type_show) !== "상설" && norm(m.cycle_label) !== "매일" && norm(m.cycle_raw) !== "매일");
+      }
+
+      return out;
+    }
+
+    // ===== 테이블 =====
+    let dataTable = null;
+
+    function renderTable(rows) {
+      const tbody = document.querySelector("#tbl tbody");
+      tbody.innerHTML = "";
+
+      for (const m of rows) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${escapeHtml(m.name)}</td>
+          <td>${escapeHtml(m.type_show || m.cycle_label || m.cycle_raw || "")}</td>
+          <td>${escapeHtml(m.sido || "")}</td>
+          <td>${escapeHtml(m.sigungu || "")}</td>
+          <td>${escapeHtml(m.address || "")}</td>
+        `;
+        tr.addEventListener("click", () => focusMarket(m));
+        tbody.appendChild(tr);
+      }
+
+      if (dataTable) {
+        dataTable.destroy();
+        dataTable = null;
+      }
+
+      dataTable = $("#tbl").DataTable({
+        pageLength: 10,
+        order: [],
+        language: {
+          search: "Search:",
+          lengthMenu: "Show _MENU_ entries",
+          info: "Showing _START_ to _END_ of _TOTAL_ entries",
+          infoEmpty: "Showing 0 to 0 of 0 entries",
+          emptyTable: "No data available in table",
+        }
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    // ===== 지도 =====
+    let map = null;
+    let geocoder = null;
+    let markers = [];
+    let infowindow = null;
+
+    function clearMarkers() {
+      for (const mk of markers) mk.setMap(null);
+      markers = [];
+    }
+
+    function focusMarket(m) {
+      // 좌표 있으면 그걸로, 없으면 geocoder로 주소 검색
+      const lat = Number(m.lat);
+      const lng = Number(m.lng);
+
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const pos = new kakao.maps.LatLng(lat, lng);
+        map.setCenter(pos);
+        map.setLevel(6);
+        showInfo(pos, m);
+        return;
+      }
+
+      if (!geocoder) return;
+      const addr = norm(m.address);
+      if (!addr) return;
+
+      geocoder.addressSearch(addr, function(result, status) {
+        if (status !== kakao.maps.services.Status.OK) return;
+        const pos = new kakao.maps.LatLng(result[0].y, result[0].x);
+        map.setCenter(pos);
+        map.setLevel(6);
+        showInfo(pos, m);
+      });
+    }
+
+    function showInfo(pos, m) {
+      if (!infowindow) infowindow = new kakao.maps.InfoWindow({ removable: true });
+      const content = `
+        <div style="padding:10px; font-size:13px; line-height:1.35;">
+          <div style="font-weight:700; margin-bottom:6px;">${escapeHtml(m.name)}</div>
+          <div>장날: ${escapeHtml(m.type_show || m.cycle_label || m.cycle_raw || "")}</div>
+          <div>${escapeHtml(m.sido || "")} ${escapeHtml(m.sigungu || "")}</div>
+          <div>${escapeHtml(m.address || "")}</div>
+        </div>
+      `;
+
+      infowindow.setContent(content);
+
+      // 근처에 마커가 없으면 임시 마커 하나 찍어서 띄움
+      const tmp = new kakao.maps.Marker({ position: pos });
+      tmp.setMap(map);
+      infowindow.open(map, tmp);
+
+      // 3초 뒤 임시 마커 제거 (원하면 지워도 됨)
+      setTimeout(() => tmp.setMap(null), 3000);
+    }
+
+    function renderMarkers(rows) {
+      clearMarkers();
+
+      // 기본 센터
+      map.setCenter(new kakao.maps.LatLng(36.5, 127.8));
+      map.setLevel(13);
+
+      const bounds = new kakao.maps.LatLngBounds();
+      let hasAny = false;
+
+      for (const m of rows) {
+        const lat = Number(m.lat);
+        const lng = Number(m.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+        const pos = new kakao.maps.LatLng(lat, lng);
+        const mk = new kakao.maps.Marker({ position: pos });
+        mk.setMap(map);
+
+        kakao.maps.event.addListener(mk, "click", () => showInfo(pos, m));
+
+        markers.push(mk);
+        bounds.extend(pos);
+        hasAny = true;
+      }
+
+      if (hasAny) {
+        map.setBounds(bounds);
+      }
+    }
+
+    // ===== 실행 =====
+    function showWarn(msg) {
+      const el = document.getElementById("warnText");
+      el.style.display = "block";
+      el.textContent = msg;
+    }
+
+    kakao.maps.load(async function () {
+      try {
+        // 지도/지오코더는 SDK 로드 완료 후 생성해야 안전함
+        map = new kakao.maps.Map(document.getElementById("map"), {
+          center: new kakao.maps.LatLng(36.5, 127.8),
+          level: 13
+        });
+        geocoder = new kakao.maps.services.Geocoder();
+
+        const markets = await loadMarkets();
+        const filtered = applyFilter(markets);
+
+        if (filtered.length === 0) {
+          showWarn("데이터 없음");
+        }
+
+        renderMarkers(filtered);
+        renderTable(filtered);
+
+      } catch (e) {
+        console.error(e);
+        showWarn("오류: " + (e?.message || e));
+      }
     });
-
-})
-.catch(err => {
-    $("#error").text("데이터 로딩 실패");
-    console.error(err);
-});
-
-</script>
-
+  </script>
 </body>
 </html>
